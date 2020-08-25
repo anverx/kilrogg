@@ -1,4 +1,5 @@
 #!/usr/bin/env python
+# Copyright (c) 2013, Anatoli Verkhovski
 """ Eye of Kilrogg """
 
 import gtk
