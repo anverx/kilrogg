@@ -1,4 +1,4 @@
-#!/usr/bin/python2
+#!/usr/bin/env python
 """ Eye of Kilrogg """
 
 import gtk
@@ -11,49 +11,27 @@ import gobject
 import subprocess
 import pickle
 import os
-import TreeViewTooltips
+
 import logging
 import fcntl
 import struct
 import requests
-from typing import Dict, Optional
+try:
+    from typing import Dict, Optional
+except ImportError:
+    Dict = dict
+    Optional = None
+
+import TreeViewTooltips
+from filter import node_class_filter
 
 SCAN_LOOP_DELAY = 30
 
-# import string
-# import operator
-# from operator import itemgetter
-
-# os.system('xterm -e ssh back-door -l root &')
-logging.basicConfig()
-LOG = logging.getLogger('kilrogg')
-LOG.setLevel(logging.DEBUG)
-IFACE = 'eth0'
-
-
+IFACE = 'eth0'  # type: str
+LOG = None  # type: Optional[logging.Logger]
 host_list = {}
 events = []
 # ui = False
-
-node_class_filter = [
-    # field  Match     resulting class
-    ['mac', '00:1b:eb', 'CPC/VDX'],
-    ['mac', '00:08:9',  'Wafer'],
-    ['mac', '00:1b:c5', 'whitebox'],
-    ['mac', '02', 'oLinuxino'],
-    # ['mac', '02:03:06', 'oLinuxino'], # 02:18:06, 02:03:06, 02:c3:05
-    ['mac', '00:07',    'Idesco Terminal 1.0'],
-    ['mac', '00:14:2D:40',  'Idesco Terminal 2.0'],
-    ['mac', '00:e0:4c', 'Idesco Terminal 1.0'],
-    ['mac', 'd8:80:39', 'Numato IO'],
-    ['name', 'android', 'Phone/Tablet'],
-    ['mac', '00:e8:4C', 'Qotom miniPC'],
-    ['mac', '00:0e:c4', 'Qotom new'],  # :d3:aa:fb
-    # ['mac', '00:14:2D:2B', 'Orangebox'], # 00:14:2D:2B:7C:E1, 7D, 01
-    ['mac', '00:14:2D', 'Orangebox'],  # 00:14:2D:2B:7C:E1, 7D, 01
-    ['mac', '5C:cf', 'esp8266'],
-    ['mac', '30:1f:9a', 'oLinuxino N'] # 30:1f:9a:d0:71:4e
-]
 
 node_state_colors = {
     'recently down': '#FFe0e0',
@@ -65,9 +43,9 @@ node_state_colors = {
 
 
 class NetThread(threading.Thread):
-    """ All the network stuff is done in a separate thread so the
-        gui wouldn't lock up """
-        
+    """ All the network stuff is done in a separate thread so the gui wouldn't lock up """
+    MACLOOKUPSITE = 'https://api.macvendors.com/'
+
     def __init__(self):
         threading.Thread.__init__(self)
         self.name = 'Net thread'
@@ -108,7 +86,7 @@ class NetThread(threading.Thread):
                                 try:
                                     # LOG.debug('looking up: %s', row[0] )
                                     tdata['name'] = socket.gethostbyaddr(row[0])[0]
-                                except (socket.gaierror, socket.herror) as exc:
+                                except (socket.gaierror, socket.herror):  # as exc:
                                     tdata['name'] = tdata['IP']
                                     # LOG.debug(' lookup fails %s %s', row[0] ,str(exc))
 
@@ -136,7 +114,7 @@ class NetThread(threading.Thread):
         :param str host:
         :return:
         """
-        res = {'state':'up', 'tst': time.time()}
+        res = {'state': 'up', 'tst': time.time()}
         LOG.debug('nmaping host: %s ...', host)
         nmap = subprocess.check_output(['nmap', '-Pn', host])
         if 'Host is down' in nmap:
@@ -166,17 +144,16 @@ class NetThread(threading.Thread):
         LOG.debug('Nmap %s : %s', host, str(res))
         return res
 
-    @staticmethod
-    def mac_manufacturer(mac):
+    def mac_manufacturer(self, mac):
         """
 
         :param str mac:
         :return:
         :rtype: Optional[str]
         """
-        LOOKUPSITE = 'https://api.macvendors.com/'
+
         try:
-            r = requests.get(LOOKUPSITE + mac)
+            r = requests.get(self.MACLOOKUPSITE + mac)
             # LOG.debug('reply: %s errors: %r not found %r', r, 'errors' in r, 'Not Found')
             if 'errors' in r.text:
 
@@ -186,8 +163,8 @@ class NetThread(threading.Thread):
                 LOG.debug('Errors: %s', r)  # if any other error return None
                 return None
             return r.text
-        except requests.exceptions.ConnectionError, exc:
-            LOG.debug('Connection to % failed: %s', LOOKUPSITE, exc)
+        except requests.exceptions.ConnectionError as exc:
+            LOG.debug('Connection to % failed: %s', self.MACLOOKUPSITE, exc)
         return None
 
         # pass
@@ -286,8 +263,11 @@ class MyTooltips(TreeViewTooltips.TreeViewTooltips):
 
 def main():
     """ Main thread is the gui thread, in addition a networking thread is started, it scans the net for  """
-    global host_list, events
+    global host_list, events, LOG
 
+    logging.basicConfig()
+    LOG = logging.getLogger('kilrogg')
+    LOG.setLevel(logging.DEBUG)
     LOG.debug('starting...')   
     gobject.threads_init()
     
@@ -298,7 +278,7 @@ def main():
             tmp = pickle.load(open("kilrogg.p", "rb"))
             host_list = tmp.get('hosts', {})
             events = tmp.get('events', [])
-        except (IOError, AttributeError), exc:
+        except (IOError, AttributeError) as exc:
             LOG.warning('REading pickled data: %s', exc)
             pass
     
@@ -359,10 +339,10 @@ class GUI(object):
     @staticmethod
     def on_external(_, params):
         if params['command'] == 'ssh':
-            os.system('xterm -e ssh '+params['target']+' -l root &')
+            os.system('xterm -e ssh ' + params['target'] + ' -l root &')
         if params['command'] == 'http':
-            LOG.debug('http://'+params['target'])
-            subprocess.Popen(['xdg-open', 'http://'+params['target']])
+            LOG.debug('http://' + params['target'])
+            subprocess.Popen(['xdg-open', 'http://' + params['target']])
 
     def on_label(self, _, host):
         """ Label a host """
@@ -461,7 +441,11 @@ class GUI(object):
 
     @staticmethod
     def format_tooltip(host):
-        """ Prepare tooltip string """
+        """ Prepare tooltip string
+        :param Dict host:
+        :return:
+        :rtype: str
+        """
         
         buf = ' MAC \t: ' + host['mac']
         buf += '\n iface\t: ' + host['iface']
