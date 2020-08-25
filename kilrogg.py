@@ -125,15 +125,16 @@ class NetThread(threading.Thread):
         #    res['state'] = 'down'
         #    return res
         # res['state'] = 'up'
+        nmap = nmap.split('\n')
         try:
-            res['IP'] = nmap[2].strip().split(' ')[-1]
-            res['Latency'] = nmap[3].strip().split(' ')[-2][1:]
+            res['IP'] = nmap[1].strip().split(' ')[-1]
+            res['Latency'] = nmap[2].strip().split(' ')[-2][1:]
         except IndexError:
             logging.warning('nmap index error: res: %r', nmap, exc_info=True)
 
         if nmap[4].find('All 1000') == -1:  # if have open ports
             res['ports'] = []
-            for i in nmap[6:]:
+            for i in nmap[5:]:
                 if i[:12] == 'MAC Address:':
                     res['MAC'] = i.strip().split()[2]
                     res['MAC owner'] = i[i.find('('):]
