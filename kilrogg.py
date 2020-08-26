@@ -28,7 +28,6 @@ from filter import node_class_filter
 
 SCAN_LOOP_DELAY = 30
 
-IFACE = 'eth0'  # type: str
 LOG = None  # type: Optional[logging.Logger]
 host_list = {}
 events = []
@@ -42,10 +41,26 @@ node_state_colors = {
     'awhile down':   '#f0f0f0'
 }
 
+def get_default_iface_name_linux():
+    """
+    straight from
+    stackoverflow.com/questions/20908287/is-there-a-method-to-get-default-network-interface-on-local-using-python3
+    """
+    route = "/proc/net/route"
+    with open(route) as f:
+        for line in f.readlines():
+            try:
+                iface, dest, _, flags, _, _, _, _, _, _, _, =  line.strip().split()
+                if dest != '00000000' or not int(flags, 16) & 2:
+                    continue
+                return iface
+            except Exception:
+                continue
+    return None
 
 class NetThread(threading.Thread):
     """ All the network stuff is done in a separate thread so the gui wouldn't lock up """
-    MACLOOKUPSITE = 'https://api.macvendors.com/'
+    MAC_LOOKUP_SITE = 'https://api.macvendors.com/'
 
     def __init__(self):
         threading.Thread.__init__(self)
@@ -57,9 +72,21 @@ class NetThread(threading.Thread):
         LOG.debug('NetThread staring...')
 
         while True:
+            iface = get_default_iface_name_linux()
+            if not iface:
+                LOG.debug('Couldn\'t nefault network interface')
+                time.sleep(5)
+                continue
             # target = socket.gethostbyname(socket.gethostname())  # doesn't work everywhere
-            tmp_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-            target = socket.inet_ntoa(fcntl.ioctl(tmp_sock.fileno(), 0x8915, struct.pack('256s', IFACE[:15]))[20:24])
+            try:
+                tmp_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+                # target = socket.inet_ntoa(fcntl.ioctl(tmp_sock.fileno(), 0x8915, struct.pack('256s', IFACE[:15]))[20:24])
+                target = socket.inet_ntoa(fcntl.ioctl(tmp_sock.fileno(), 0x8915, struct.pack('256s', iface))[20:24])
+            except IOError as exc:
+                LOG.debug('Couldn\'t get local IP: %s', exc)
+                time.sleep(5)
+                continue
+
 
             target = '.'.join(target.split('.')[:-1])  # s = string.join(s.split('.')[:-1],'.')
             target += '.0/24'
@@ -155,7 +182,7 @@ class NetThread(threading.Thread):
         """
 
         try:
-            r = requests.get(self.MACLOOKUPSITE + mac)
+            r = requests.get(self.MAC_LOOKUP_SITE + mac)
             # LOG.debug('reply: %s errors: %r not found %r', r, 'errors' in r, 'Not Found')
             if 'errors' in r.text:
 
@@ -166,7 +193,7 @@ class NetThread(threading.Thread):
                 return None
             return r.text
         except requests.exceptions.ConnectionError as exc:
-            LOG.debug('Connection to % failed: %s', self.MACLOOKUPSITE, exc)
+            LOG.debug('Connection to % failed: %s', self.MAC_LOOKUP_SITE, exc)
         return None
 
         # pass
