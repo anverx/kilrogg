@@ -94,22 +94,28 @@ get_tooltip() is implemented).
 
 """
 
-import pygtk
+from typing import Dict, Optional, Union
+import gi
 
-pygtk.require('2.0')
+gi.require_version("Gtk", "3.0")
 
-import gtk
-import gtk.gdk
-import gobject
+from gi.repository import Gtk
+from gi.repository import GLib
+# import pygtk
+#
+# pygtk.require('2.0')
+#
+# import gtk
+# import gtk.gdk
+# import gobject
 
 # import glib
 
-if gtk.gtk_version < (2, 8):
-    import warnings
-
-    msg = ('''This module was developed and tested with version 2.8.18 of gtk.  You are using version %d.%d.%d.  Your milage may vary.'''
-                % gtk.gtk_version)
-    warnings.warn(msg)
+# if Gtk.gtk_version < (2, 8):
+#    import warnings
+#    msg = ('''This module was developed and tested with version 2.8.18 of gtk.  You are using version %d.%d.%d.  Your milage may vary.'''
+#                % gtk.gtk_version)
+#    warnings.warn(msg)
 
 # major, minor, patch
 version = 1, 0, 0
@@ -135,15 +141,15 @@ class TreeViewTooltips:
         """
 
         # create the window
-        self.window = window = gtk.Window(gtk.WINDOW_POPUP)
+        self.window = window = Gtk.Window()  # Gtk.WINDOW_POPUP), Gtk.WINDOW_TOPLEVEL
         window.set_name('gtk-tooltips')
         window.set_resizable(False)
         window.set_border_width(4)
         window.set_app_paintable(True)
-        window.connect("expose-event", self.__on_expose_event)
+        window.connect('draw', self.__on_expose_event)
 
         # create the label
-        self.label = label = gtk.Label()
+        self.label = label = Gtk.Label()
         label.set_line_wrap(True)
         label.set_alignment(0.5, 0.5)
         label.set_use_markup(True)
@@ -185,9 +191,9 @@ class TreeViewTooltips:
         # TODO we could use some propper escaping here   
         self.label.set_label(tooltip.replace('&', '&amp;'))
         # resize window
-        w, h = window.size_request()
+        # w, h = window.size_request()
         # move the window 
-        window.move(*self.location(x, y, w, h))
+        # window.move(*self.location(x, y, w, h))
         # show it
         window.show()
         self.__shown = True
@@ -199,19 +205,19 @@ class TreeViewTooltips:
         self.window.hide()
         self.__shown = False
 
-    def __leave_handler(self, view, event):
+    def __leave_handler(self, p_view, event):
         """when the pointer leaves the view, hide the tooltip"""
 
         self.__hide()
 
-    def __motion_handler(self, view, event):
+    def __motion_handler(self, p_view, event):
         """As the pointer moves across the view, show a tooltip."""
 
-        path = view.get_path_at_pos(int(event.x), int(event.y))
+        path = p_view.get_path_at_pos(int(event.x), int(event.y))
 
         if self.__enabled and path:
             path, col, x, y = path
-            tooltip = self.get_tooltip(view, col, path)
+            tooltip = self.get_tooltip(p_view, col, path)
             if tooltip is not None:
                 tooltip = str(tooltip).strip()
                 if tooltip:
@@ -242,7 +248,7 @@ class TreeViewTooltips:
 
         # if we have something queued up, cancel it
         if self.__next:
-            gobject.source_remove(self.__next)
+            GLib.source_remove(self.__next)
             self.__next = None
 
         # if there was a request...
@@ -253,8 +259,9 @@ class TreeViewTooltips:
                 self.__show(tooltip, x, y)
             # else queue it up in 1/2 second
             else:
-                self.__next = gobject.timeout_add(int(self.get_timeout() * 1000),
-                                                  self.__show, tooltip, x, y)
+                self.__next = GLib.timeout_add(int(self.get_timeout() * 1000), self.__show, tooltip, x, y)
+                #self.__next = gobject.timeout_add(int(self.get_timeout() * 1000),
+                #                                  self.__show, tooltip, x, y)
 
         # save this cell
         self.__save = cell
@@ -267,10 +274,11 @@ class TreeViewTooltips:
         # this magic is required so the window appears with a 1-pixel
         # black border (default gtk Style).  This code is a
         # transliteration of the C implementation of gtk.Tooltips.
-        w, h = window.size_request()
-        window.style.paint_flat_box(window.window, gtk.STATE_NORMAL,
-                                    gtk.SHADOW_OUT, None, window,
-                                    'tooltip', 0, 0, w, h)
+        # w, h = window.size_request()
+        pass
+        # window.style.paint_flat_box(window.window, Gtk.STATE_NORMAL,
+        #                            Gtk.SHADOW_OUT, None, window,
+        #                            'tooltip', 0, 0, w, h)
 
     def location(self, x, y, w, h):
 
@@ -287,7 +295,7 @@ class TreeViewTooltips:
     def add_view(self, view):
         """add a gtk.TreeView to the tooltip"""
 
-        assert isinstance(view, gtk.TreeView), \
+        assert isinstance(view, Gtk.TreeView), \
             ('This handler should only be connected to '
              'instances of gtk.TreeView')
 
@@ -298,6 +306,79 @@ class TreeViewTooltips:
         """See the module doc string for a description of this method"""
 
         raise Exception('Subclass must implement get_tooltip()')
+
+
+def main():
+
+    # create a bunch of customers
+    customers = []
+    for fname, lname, phone, notes in [
+        ('Joe', 'Schmoe', '555-1212', 'Likes to Morris dance.'),
+        ('Jane', 'Doe', '555-2323',
+         'Wonders what the hell\nMorris dancing is.'),
+        ('Phred', 'Phantastic', '900-555-1212', 'Dreams of Betty.'),
+        ('Betty', 'Boop', '555-3434', 'Dreams in b&amp;w.'),
+        ('Red Sox', 'Fan', '555-4545',
+         "Still livin' 2004!\nEspecially after 2006.")]:
+        customers.append(Customer(fname, lname, phone, notes))
+
+    # Build our model and view
+    model = Gtk.ListStore(str, str, object)
+    for c in customers:
+        model.append(['%s %s' % (c.fname, c.lname), c.phone, c])
+
+    view = Gtk.TreeView(model)
+    view.get_selection().set_mode(Gtk.SELECTION_NONE)
+
+    # two columns, name and phone
+    cell = Gtk.CellRendererText()
+    cell.set_property('xpad', 20)
+    namecol = Gtk.TreeViewColumn('Customer Name', cell, text=0)
+    namecol.set_min_width(200)
+    view.append_column(namecol)
+
+    cell = Gtk.CellRendererText()
+    phonecol = Gtk.TreeViewColumn('Phone', cell, text=1)
+    view.append_column(phonecol)
+
+    # finally, connect the tooltip, specifying the name column as the
+    # column we want the tooltip to popup over.
+    tips = DemoTips(namecol)
+    tips.add_view(view)
+
+    # We're going to demonstrate enable/disable.  First we need a
+    # callback function to connect to the toggled signal.
+    def toggle(button):
+        if button.get_active():
+            tips.disable()
+        else:
+            tips.enable()
+
+    # create a checkbutton and connect our handler
+    check = Gtk.CheckButton('Check to disable view tooltips')
+    check.connect('toggled', toggle)
+
+    # a standard gtk.Tooltips to compare to
+    tt = Gtk.Tooltips()
+    tt.set_tip(check, ('This is a standard gtk tooltip.\n'
+                       'Compare me to the tooltips above.'))
+
+    # create a VBox to pack the view and checkbutton
+    vbox = Gtk.VBox()
+    vbox.pack_start(view)
+    vbox.pack_start(check, False)
+    vbox.show_all()
+
+    # pack the vbox into a simple dialog and run it
+    dialog = Gtk.Dialog('TreeViewTooltips Demo')
+    close = dialog.add_button(Gtk.STOCK_CLOSE, Gtk.RESPONSE_NONE)
+
+    # add a tooltip for the close button
+    tt.set_tip(close, 'Click to end the demo.')
+
+    dialog.set_default_size(400, 400)
+    dialog.vbox.pack_start(vbox)
+    dialog.run()
 
 
 if __name__ == '__main__':
@@ -358,74 +439,4 @@ if __name__ == '__main__':
             self.phone = phone
             self.notes = notes
 
-
-    # create a bunch of customers
-    customers = []
-    for fname, lname, phone, notes in [
-        ('Joe', 'Schmoe', '555-1212', 'Likes to Morris dance.'),
-        ('Jane', 'Doe', '555-2323',
-         'Wonders what the hell\nMorris dancing is.'),
-        ('Phred', 'Phantastic', '900-555-1212', 'Dreams of Betty.'),
-        ('Betty', 'Boop', '555-3434', 'Dreams in b&amp;w.'),
-        ('Red Sox', 'Fan', '555-4545',
-         "Still livin' 2004!\nEspecially after 2006.")]:
-        customers.append(Customer(fname, lname, phone, notes))
-
-    # Build our model and view
-    model = gtk.ListStore(str, str, object)
-    for c in customers:
-        model.append(['%s %s' % (c.fname, c.lname), c.phone, c])
-
-    view = gtk.TreeView(model)
-    view.get_selection().set_mode(gtk.SELECTION_NONE)
-
-    # two columns, name and phone
-    cell = gtk.CellRendererText()
-    cell.set_property('xpad', 20)
-    namecol = gtk.TreeViewColumn('Customer Name', cell, text=0)
-    namecol.set_min_width(200)
-    view.append_column(namecol)
-
-    cell = gtk.CellRendererText()
-    phonecol = gtk.TreeViewColumn('Phone', cell, text=1)
-    view.append_column(phonecol)
-
-    # finally, connect the tooltip, specifying the name column as the
-    # column we want the tooltip to popup over.
-    tips = DemoTips(namecol)
-    tips.add_view(view)
-
-    # We're going to demonstrate enable/disable.  First we need a
-    # callback function to connect to the toggled signal.
-    def toggle(button):
-        if button.get_active():
-            tips.disable()
-        else:
-            tips.enable()
-
-
-    # create a checkbutton and connect our handler
-    check = gtk.CheckButton('Check to disable view tooltips')
-    check.connect('toggled', toggle)
-
-    # a standard gtk.Tooltips to compare to
-    tt = gtk.Tooltips()
-    tt.set_tip(check, ('This is a standard gtk tooltip.\n'
-                       'Compare me to the tooltips above.'))
-
-    # create a VBox to pack the view and checkbutton
-    vbox = gtk.VBox()
-    vbox.pack_start(view)
-    vbox.pack_start(check, False)
-    vbox.show_all()
-
-    # pack the vbox into a simple dialog and run it
-    dialog = gtk.Dialog('TreeViewTooltips Demo')
-    close = dialog.add_button(gtk.STOCK_CLOSE, gtk.RESPONSE_NONE)
-
-    # add a tooltip for the close button
-    tt.set_tip(close, 'Click to end the demo.')
-
-    dialog.set_default_size(400, 400)
-    dialog.vbox.pack_start(vbox)
-    dialog.run()
+    main()

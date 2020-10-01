@@ -9,6 +9,7 @@ gi.require_version("Gtk", "3.0")
 
 from gi.repository import Gtk
 from gi.repository import GLib
+from gi.repository import GObject
 # from gi import pygtkcompat
 # pygtkcompat.enable()
 # pygtkcompat.enable_gtk(version='3.0')
@@ -193,7 +194,7 @@ class NetThread(threading.Thread):
                     break
                 res['ports'].append(i.split())
 
-        LOG.debug('Nmap %s : %s', host, str(res))
+        # LOG.debug('Nmap %s : %s', host, str(res))
         return res
 
     def mac_manufacturer(self, mac):
@@ -385,6 +386,10 @@ class GUI(object):
         # mytips.add_view(tview)
     
         tview.connect("button-press-event", self.on_treeview_button_press_event)
+        # Gtk.gtk_widget_set_tooltip_markup(tview, 'bleh?')
+        tview.set_tooltip_markup('+++ bleh? +++ \n -------------')
+        tview.has_tooltip = True
+        tview.connect('query-tooltip', self.query_tooltip)
 
         tve = self.gui.get_object('Events')
         tve.set_model(Gtk.ListStore(str, str))
@@ -398,7 +403,26 @@ class GUI(object):
             
         self.update_gui()
         GLib.timeout_add(2000, self.update_gui)  # install repaint timer
-        
+
+    def query_tooltip(self, *args):
+        """
+        params Tuple args: Tree, x, y, keyboard mode, tooltip
+        """
+
+        logging.debug('tooltip? %r', repr(args))
+
+        result = args[0].get_path_at_pos(args[1],args[2])
+
+        if result is None:
+            return False
+
+        path, column, _, _ = result
+        mac = args[0].get_model()[path][5]
+        logging.debug('path? %r', repr(args[0].get_model()[path][5]))
+        args[4].set_markup(self.format_tooltip(host_list[mac]))
+
+        return True
+
     @staticmethod
     def on_external(_, params):
         if params['command'] == 'ssh':
@@ -413,7 +437,7 @@ class GUI(object):
                                                       % host_list[host]['name'])
         try: 
             res = self.gui.get_object('dialog_label').run()
-            if res == Gtk.RESPONSE_OK:
+            if res == Gtk.ResponseType.OK:
                 LOG.debug('OK: label:%s, host: %s', self.gui.get_object('entry_label').get_text(), str(host_list[host]))
                 host_list[host]['label'] = self.gui.get_object('entry_label').get_text()
         finally:
@@ -449,8 +473,8 @@ class GUI(object):
                             hosts_popup.append(mi)
                             mi.connect("activate", self.on_external, {'target': host['name'], 'command': 'http'})
                             mi.show()
-    
-                hosts_popup.popup(None, None, None, event.button, etime)
+    #       self.popup_for_device(None, parent_menu_shell, parent_menu_item, func, data, button, activate_time)
+                hosts_popup.popup(None, None, None, None, event.button, etime)
             return True
 
     def update_gui(self):
@@ -521,7 +545,6 @@ class GUI(object):
                 buf += '\n Host is unreachable.'
             else:                
                 if host['nmap'].get('IP'):
-                    print('name:', host['nmap'])
                     buf += '\n IP   \t\t: ' + host['nmap']['IP'].decode("utf-8")
                 if host['nmap'].get('MAC owner'):
                     buf += '\n MAC owner\t:'+host['nmap']['MAC owner']
