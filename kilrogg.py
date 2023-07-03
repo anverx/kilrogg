@@ -10,28 +10,18 @@ gi.require_version("Gtk", "3.0")
 from gi.repository import Gtk
 from gi.repository import GLib
 
-import socket
-import threading
 import time
-# import gobject
 import subprocess
-import pickle
 import os
-
 import logging
-import fcntl
-import struct
-import requests
 
-# import TreeViewTooltips
-from filter import node_class_filter
+from net_scanner import NetScanner
 
-SCAN_LOOP_DELAY = 30
+# SCAN_LOOP_DELAY = 30
 
 LOG = None  # type: logging.Logger|None
-host_list = {}
-events = []
-# ui = False
+scanner = None  # type: NetScanner|None
+
 
 node_state_colors = {
     'recently down': '#FFe0e0',
@@ -42,286 +32,35 @@ node_state_colors = {
 }
 
 
-def get_default_iface_name_linux():
+def color_lookup(state, timestamp):
     """
-    straight from
-    stackoverflow.com/questions/20908287/is-there-a-method-to-get-default-network-interface-on-local-using-python3
+    :param str state:
+    :param int timestamp:
     """
-    route = "/proc/net/route"
-    with open(route) as f:
-        for line in f:
-            try:
-                iface, dest, _, flags, _, _, _, _, _, _, _, =  line.strip().split()
-                if dest != '00000000' or not int(flags, 16) & 2:
-                    continue
-                return iface
-            except (AttributeError, TypeError, ValueError):
-                continue
-    return None
+    logging.debug('State: %s, tst: %r', state, timestamp)
+    if state != 'down':
+        if time.time() - timestamp < 60 * 5:
+            return node_state_colors['recently up']
+        else:
+            return node_state_colors['up']
+
+        # LOG.debug('Host %s down: %d min', host_list[i]['name'],
+        #         int(time.time()-host_list[i]['state']['tst'])/60)
+    if time.time() - timestamp < 60 * 5:
+        return node_state_colors['recently down']
+    elif time.time() - timestamp < 60 * 60 * 5:
+        return node_state_colors['down']
+
+    return node_state_colors['awhile down']
 
 
-class NetThread(threading.Thread):
-    """ All the network stuff is done in a separate thread so the gui wouldn't lock up """
-    MAC_LOOKUP_SITE = 'https://api.macvendors.com/'
-    MANUFACTURER_DB = 'manufacturer_db.p'
-    COLUMN_MAC = 3
-    COLUMN_IP = 0
-    COLUMN_INTERFACE = 5
-
-    def __init__(self):
-        threading.Thread.__init__(self)
-        self.name = 'Net thread'
-        self.daemon = True
-        self.quit = False
-        self.manufacturer_db = {}
-        try:
-            self.manufacturer_db = pickle.load(open(self.MANUFACTURER_DB, 'rb'))
-            logging.info('Loadded manufacturers for %d hosts.', len(self.manufacturer_db))
-        except (IOError, AttributeError) as exc:
-            LOG.warning('REading pickled data: %s', exc)
-
-    def run(self):
-        LOG.debug('NetThread staring...')
-
-        while True:
-            iface = get_default_iface_name_linux()
-            if not iface:
-                LOG.debug('Couldn\'t nefault network interface')
-                time.sleep(5)
-                continue
-            # target = socket.gethostbyname(socket.gethostname())  # doesn't work everywhere
-            try:
-                tmp_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-                # target = socket.inet_ntoa(fcntl.ioctl(tmp_sock.fileno(),
-                # 0x8915, struct.pack('256s', IFACE[:15]))[20:24])
-                target = socket.inet_ntoa(fcntl.ioctl(tmp_sock.fileno(), 0x8915,
-                                                      struct.pack('256s', iface.encode()))[20:24])
-            except IOError as exc:
-                LOG.debug('Couldn\'t get local IP: %s', exc)
-                time.sleep(5)
-                continue
-
-            target = '.'.join(target.split('.')[:-1]) + '.0/24'
-#                       s = 'fping -c1 -q -g '+s +'.0/24 2 >/dev/null'
-#                       print 'command:', s
-            fnull = open(os.devnull, 'w')
-#            print 'fping', '-c1', '-q', '-g', target
-            subprocess.call(['fping', '-c1', '-q', '-g', target], stderr=fnull)
-            # res = subprocess.check_output(['arp', '-n'])  # TODO change to reading of /proc/net/arp
-            res = open('/proc/net/arp').read()
-            res = str(res).split('\n')
-
-            fresh_host_list = {}
-            for i in res:
-                if i.rfind('(incomplete)') == -1:
-                    row = i.split()
-                    # print ('row: ', row)
-                    if len(row) > 2:
-                        # print t, len(t), t[2],  t[2].find(':')
-
-                        if row[self.COLUMN_MAC].find(':') != -1:
-                            # LOG.debug('%s  %s', ','.join(row), i)
-                            # tdata = dict(name = row[0], mac = row[2], iface = row[4], scan_tst = time.time() )
-                            tdata = {'IP': row[self.COLUMN_IP], 'mac': row[self.COLUMN_MAC],
-                                     'iface': row[self.COLUMN_INTERFACE],
-                                     'scan_tst': time.time()}  # type: Dict[str, str|float]
-                            if True:  # not (host_list.get(row[2]) and  host_list[row[2]].get('IP')) :
-                                try:
-                                    # LOG.debug('looking up: %s', row[0] )
-                                    tdata['name'] = socket.gethostbyaddr(row[self.COLUMN_IP])[0]
-                                except (socket.gaierror, socket.herror):  # as exc:
-                                    tdata['name'] = tdata['IP']
-                                    # LOG.debug(' lookup fails %s %s', row[0] ,str(exc))
-
-                            for j in node_class_filter:
-                                if tdata[j[0]].lower().startswith(j[1].lower()):
-                                    tdata['node_class'] = j[2]
-#                                                       node_class = ''
-                            fresh_host_list[row[self.COLUMN_MAC]] = tdata
-                            # print(repr(tdata))
-            LOG.debug('Found %d hosts', len(fresh_host_list))
-            self.update_host_list(fresh_host_list)
-#            self.update_gui()
-
-#                       for j in host_list:
-#                               if not host_list[j].get('node_class'):
-#                                       print j, host_list[j]
-#                                       model.append((host_list[j]['name'],''))
-
-            time.sleep(SCAN_LOOP_DELAY)
-            if self.quit:
-                return
-
-    @staticmethod
-    def nmap(host):
-        """
-        :param str host:
-        :return:
-        """
-        res = {'state': 'up', 'tst': time.time()}
-        LOG.debug('nmaping host: %s ...', host)
-        nmap = subprocess.check_output(['nmap', '-Pn', host])
-        if b'Host is down' in nmap:
-            res['state'] = 'down'
-            return res
-        # if nmap[2].find('down') != -1:
-        #    res['state'] = 'down'
-        #    return res
-        # res['state'] = 'up'
-        nmap = nmap.strip().split(b'\n')
-        for i in range(4):
-            logging.debug('    %d  [%s]', i, nmap[i])
-        try:
-            res['IP'] = nmap[1].strip().split(b' ')[-1]
-            res['Latency'] = nmap[2].strip().split(b' ')[-2][1:]
-        except IndexError:
-            logging.warning('nmap index error: res: %r', nmap, exc_info=True)
-
-        if nmap[4].find(b'All 1000') == -1:  # if have open ports
-            res['ports'] = []
-            for i in nmap[5:]:
-                if i[:12] == 'MAC Address:':
-                    res['MAC'] = i.strip().split()[2]
-                    res['MAC owner'] = i[i.find(b'('):]
-                    break
-                if not i:  # when ran as user namp won't give MAC or MAC owner
-                    break
-                res['ports'].append(i.split())
-
-        # LOG.debug('Nmap %s : %s', host, str(res))
-        return res
-
-    def mac_manufacturer(self, mac):
-        """
-
-        :param str mac:
-        :return:
-        :rtype: str|None
-        """
-        if mac in self.manufacturer_db:
-            return self.manufacturer_db[mac]
-
-        try:
-            logging.debug('Mac: %s [%s]', mac, repr(mac))
-            r = requests.get(self.MAC_LOOKUP_SITE + mac)
-            # LOG.debug('reply: %s errors: %r not found %r', r, 'errors' in r, 'Not Found')
-            if 'errors' in r.text:
-
-                if 'Not Found' in r.text:    # If not found return Not Found
-                    LOG.debug('mac %s not found', mac)
-                    return 'Not Found'
-                LOG.debug('Errors: %s', r)  # if any other error return None
-                return None
-            self.manufacturer_db[mac] = r.text
-            pickle.dump(self.manufacturer_db, open(self.MANUFACTURER_DB, 'wb'))
-            return r.text
-        except requests.exceptions.ConnectionError as exc:
-            LOG.debug('Connection to % failed: %s', self.MAC_LOOKUP_SITE, exc)
-        return None
-
-        # pass
-
-    def update_host_list(self, new_list):
-        do_nmap = True
-
-        for i in host_list:
-            if not host_list[i].get('state'):  # if state is missing from record
-                host_list[i]['state'] = {'state': 'down', 'tst': 0, 'color': '#A0A0A0'}
-            if new_list.get(i):
-                if host_list[i]['state']['state'] == 'down':
-                    host_list[i]['state'] = {'state': 'up', 'tst': time.time()}
-                    events.append({'host_name': host_list[i]['name'],
-                                   'host_mac': host_list[i]['mac'], 'event': 'host up', 'tst': time.time()})
-            
-            else:  # if host is present in old list but absent in new list
-                if True:  # time.time() - host_list[i]['scan_tst'] < SCAN_LOOP_DELAY * 1.5:
-                    # #TODO report once and exactly once
-                    if host_list[i].get('state') and host_list[i]['state'].get('state') != 'down':
-                        events.append({'host_name': host_list[i]['name'], 'host_mac': host_list[i]['mac'],
-                                       'event': 'host down', 'tst': time.time()})
-                        
-                    host_list[i]['state'] = {'state': 'down', 'tst': host_list[i]['scan_tst']}
-
-        # logging.debug('New list: %s', repr(new_list))
-        for i in new_list:
-            if host_list.get(i):
-                if host_list[i].get('name') != new_list[i].get('name'):
-                    LOG.debug('Host changed name: %s %s', host_list[i].get('name'), new_list[i].get('name'))
-                if host_list[i].get('IP') != new_list[i].get('IP'):
-                    LOG.debug('Host changed IP: %s %s', host_list[i].get('IP'), new_list[i].get('IP'))
-                                
-                host_list[i].update(new_list[i])
-                if not host_list[i].get('names'):
-                    host_list[i]['names'] = []
-                    
-                if not host_list[i].get('IPs'):
-                    host_list[i]['IPs'] = []
-                
-                # host can have multiple names and IPs over period of time, remember them all
-                if new_list[i].get('name') not in host_list[i]['names']:  
-                    host_list[i]['names'].append(new_list[i]['name'])
-               
-                if new_list[i].get('IP') not in host_list[i]['IPs']:
-                    host_list[i]['IPs'].append(new_list[i]['IP'])
-            else:
-                host_list[i] = new_list[i]
-                host_list[i]['state'] = {'state': 'up', 'tst': time.time()}
-                events.append({'host_name': new_list[i]['name'], 'host_mac': new_list[i]['mac'],
-                               'event': 'new host', 'tst': time.time()})
-#                               print {'host_name' : new_list[i]['name'],
-#                                       'host_mac' : new_list[i]['mac'],
-#                                       'event' : 'new host'}
-
-            if do_nmap:
-                # LOG.debug('Host: %s  nmap: %s', host_list[i]['name'], str(host_list[i].get('nmap')))
-                try:
-                    if not host_list[i].get('nmap') or time.time()-host_list[i]['nmap']['tst'] > 60*60*24:  # daily nmap
-                        logging.debug('Nmapping %s', host_list[i]['name'])
-                        host_list[i]['nmap'] = self.nmap(host_list[i]['name'])
-
-#                               if host_list[i].get('nmap') and
-#                                       host_list[i]['nmap']['state'] == 'down' and
-#                                       time.time()-host_list[i]['scan_tst'] < SCAN_LOOP_DELAY *2:
-#                                       host_list[i]['nmap'] = self.nmap(host_list[i]['name'])
-                    do_nmap = False
-                except IndexError:
-                    logging.info('%r', host_list[i])
-        
-            if not host_list[i].get('mac owner') or 'errors' in host_list[i].get('mac owner'):
-                # LOG.debug('o: %s', host_list[i]['mac owner'])
-                # print( 'Looking up mac: ', repr(i))
-                host_list[i]['mac owner'] = self.mac_manufacturer(i)
-                LOG.debug(' MAC: %s owner: %s', i, host_list[i]['mac owner'])
-                time.sleep(2)
-
-        for i in host_list:
-            if host_list[i]['state']['state'] == 'down':
-                # LOG.debug('Host %s down: %d min', host_list[i]['name'],
-                #         int(time.time()-host_list[i]['state']['tst'])/60)
-                if time.time()-host_list[i]['state']['tst'] < 60*5:
-                    host_list[i]['state']['color'] = node_state_colors['recently down']
-                elif time.time()-host_list[i]['state']['tst'] < 60*60*5:
-                    host_list[i]['state']['color'] = node_state_colors['down']
-                else:
-                    host_list[i]['state']['color'] = node_state_colors['awhile down']
-            else:
-                if time.time()-host_list[i]['state']['tst'] < 60*5:
-                    host_list[i]['state']['color'] = node_state_colors['recently up']
-                else:
-                    host_list[i]['state']['color'] = node_state_colors['up']
 
 
-# class MyTooltips(TreeViewTooltips.TreeViewTooltips):
-#    def get_tooltip(self, view, column, path):
-#        """ Overloading the method to fetch tooltip data from treeview model, column 4 """
-        
-#        buf = view.get_model()[path[0]][4]
-#        return buf
 
 
 def main():
     """ Main thread is the gui thread, in addition a networking thread is started, it scans the net for  """
-    global host_list, events, LOG
+    global scanner, LOG
 
     # logging.basicConfig()
     logging.basicConfig(format='%(asctime)s - %(levelname)s %(filename)s(%(lineno)s):%(funcName)s %(message)s',
@@ -329,31 +68,19 @@ def main():
     LOG = logging.getLogger('kilrogg')
     LOG.setLevel(logging.DEBUG)
     LOG.debug('starting...')   
-    # gobject.threads_init()
-    
-#    host_list = ()
-#    events = {}
-    if os.path.isfile("kilrogg.p"):
-        try:
-            tmp = pickle.load(open("kilrogg.p", "rb"))
-            host_list = tmp.get('hosts', {})
-            events = tmp.get('events', [])
-        except (IOError, AttributeError) as exc:
-            LOG.warning('REading pickled data: %s', exc)
-    
+
+    scanner = NetScanner()
+    scanner.start()
+    logging.debug('starting gtk.main')
     _ = GUI()
-    
-    netthread = NetThread()
-#    netthread.update_gui()
-    netthread.start()
-    LOG.debug('starting gtk.main')
+
     try:
         Gtk.main()
-        netthread.quit = True
+        scanner.quit = True
         time.sleep(1)  # wait for nethread to terminate        
     
     finally:
-        pickle.dump({'hosts': host_list, 'events': events},  open("kilrogg.p", "wb"))
+        scanner.save()
 
 
 def compare_dicts(dict1, dict2):
@@ -443,7 +170,7 @@ class GUI(object):
         path, column, _, _ = result
         mac = args[0].get_model()[path][5]
         # logging.debug('path? %r', repr(args[0].get_model()[path][5]))
-        args[4].set_markup(self.format_tooltip(host_list[mac]))
+        args[4].set_markup(self.format_tooltip(scanner.host_list[mac]))
 
         return True
 
@@ -458,16 +185,22 @@ class GUI(object):
     def on_label(self, _, host):
         """ Label a host """
         self.gui.get_object('label_head1').set_markup('<b>Set custom label for host %s</b>'
-                                                      % host_list[host]['name'])
+                                                      % scanner.host_list[host]['name'])
         try: 
             res = self.gui.get_object('dialog_label').run()
             if res == Gtk.ResponseType.OK:
-                LOG.debug('OK: label:%s, host: %s', self.gui.get_object('entry_label').get_text(), str(host_list[host]))
-                host_list[host]['label'] = self.gui.get_object('entry_label').get_text()
+                LOG.debug('OK: label:%s, host: %s', self.gui.get_object('entry_label').get_text(),
+                          str(scanner.host_list[host]))
+                # TODO scanner.set_label(host)
+                scanner.host_list[host]['label'] = self.gui.get_object('entry_label').get_text()
         finally:
             self.gui.get_object('dialog_label').hide()
     
     def on_treeview_button_press_event(self, treeview, event):
+        """
+        :param Gtk.TreeView treeview:
+        :param event:  # some gtk event?
+        """
         x = int(event.x)
         y = int(event.y)
         etime = event.time
@@ -479,7 +212,7 @@ class GUI(object):
         treeview.set_cursor(path, col, 0)
         hosts_popup = Gtk.Menu()
 
-        host = host_list[treeview.get_model()[path[0]][5]]
+        host = scanner.host_list[treeview.get_model()[path[0]][5]]
         logging.debug('%r', host)
 
         if event.button == 1:
@@ -499,7 +232,7 @@ class GUI(object):
             self.gui.get_object('entry_info_label').set_text(host.get('label') or '')
             try:
                 ports = str(host['nmap']['ports'])
-                self.gui.get_object('txt_info_nmap').textbuffer.set_text(ports)
+                self.gui.get_object('txt_info_nmap').get_buffer().set_text(ports)
             except KeyError:
                 pass
 
@@ -536,11 +269,11 @@ class GUI(object):
 
         scroll_offset = self.gui.get_object('scrolledwindow1').get_vadjustment().get_value()
         # logging.debug('Scroll offset: %d', scroll_offset)
-        if compare_dicts(host_list, self.device_list):
+        if compare_dicts(scanner.host_list, self.device_list):
              return True
-        self.device_list = dict(host_list)
+        self.device_list = dict(scanner.host_list)
 
-        tmp_hosts = sorted(host_list.values(), key=lambda k: k['name'])
+        tmp_hosts = sorted(scanner.host_list.values(), key=lambda k: k['name'])
         # if self.device_list == tmp_hosts:
         #    return True
 
@@ -562,8 +295,9 @@ class GUI(object):
         for group_list in (sorted(class_list, key=lambda k: k['node_class']), other_list, old_list):
             for j in group_list:
                 color = '#e0e0e0'
-                if j.get('state') and j['state'].get('color'):
-                    color = j['state']['color']
+                # if j.get('state') and j['state'].get('color'):
+                color = color_lookup(j['state']['state'], j['state']['tst'])
+                        # j['state']['color']
                 # print (repr(j))
                 buf = self.format_tooltip(j)
                 column2 = ''
@@ -587,7 +321,7 @@ class GUI(object):
         tve.get_model().clear()
         
         count = 0  # limit number of events shown to 200
-        for i in reversed(events):
+        for i in reversed(scanner.events):
             count += 1
             if count > 200:
                 break
