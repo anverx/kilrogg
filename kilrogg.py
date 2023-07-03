@@ -2,22 +2,15 @@
 # Copyright (c) 2013, Anatoli Verkhovski
 """ Eye of Kilrogg """
 
-from typing import Dict, Optional, Union
+from typing import Dict
 import gi
 
 gi.require_version("Gtk", "3.0")
 
 from gi.repository import Gtk
 from gi.repository import GLib
-from gi.repository import GObject
-# from gi import pygtkcompat
-# pygtkcompat.enable()
-# pygtkcompat.enable_gtk(version='3.0')
 
-# import gtk
-# import gtk.glade
 import socket
-
 import threading
 import time
 # import gobject
@@ -35,7 +28,7 @@ from filter import node_class_filter
 
 SCAN_LOOP_DELAY = 30
 
-LOG = None  # type: Optional[logging.Logger]
+LOG = None  # type: logging.Logger|None
 host_list = {}
 events = []
 # ui = False
@@ -56,7 +49,7 @@ def get_default_iface_name_linux():
     """
     route = "/proc/net/route"
     with open(route) as f:
-        for line in f.readlines():
+        for line in f:
             try:
                 iface, dest, _, flags, _, _, _, _, _, _, _, =  line.strip().split()
                 if dest != '00000000' or not int(flags, 16) & 2:
@@ -108,8 +101,7 @@ class NetThread(threading.Thread):
                 time.sleep(5)
                 continue
 
-            target = '.'.join(target.split('.')[:-1])  # s = string.join(s.split('.')[:-1],'.')
-            target += '.0/24'
+            target = '.'.join(target.split('.')[:-1]) + '.0/24'
 #                       s = 'fping -c1 -q -g '+s +'.0/24 2 >/dev/null'
 #                       print 'command:', s
             fnull = open(os.devnull, 'w')
@@ -132,7 +124,7 @@ class NetThread(threading.Thread):
                             # tdata = dict(name = row[0], mac = row[2], iface = row[4], scan_tst = time.time() )
                             tdata = {'IP': row[self.COLUMN_IP], 'mac': row[self.COLUMN_MAC],
                                      'iface': row[self.COLUMN_INTERFACE],
-                                     'scan_tst': time.time()}  # type: Dict[str, Union[str, float]]
+                                     'scan_tst': time.time()}  # type: Dict[str, str|float]
                             if True:  # not (host_list.get(row[2]) and  host_list[row[2]].get('IP')) :
                                 try:
                                     # LOG.debug('looking up: %s', row[0] )
@@ -147,7 +139,7 @@ class NetThread(threading.Thread):
 #                                                       node_class = ''
                             fresh_host_list[row[self.COLUMN_MAC]] = tdata
                             # print(repr(tdata))
-            LOG.debug('Found %d hosts', len(fresh_host_list))    
+            LOG.debug('Found %d hosts', len(fresh_host_list))
             self.update_host_list(fresh_host_list)
 #            self.update_gui()
 
@@ -176,7 +168,9 @@ class NetThread(threading.Thread):
         #    res['state'] = 'down'
         #    return res
         # res['state'] = 'up'
-        nmap = nmap.split(b'\n')
+        nmap = nmap.strip().split(b'\n')
+        for i in range(4):
+            logging.debug('    %d  [%s]', i, nmap[i])
         try:
             res['IP'] = nmap[1].strip().split(b' ')[-1]
             res['Latency'] = nmap[2].strip().split(b' ')[-2][1:]
@@ -202,7 +196,7 @@ class NetThread(threading.Thread):
 
         :param str mac:
         :return:
-        :rtype: Optional[str]
+        :rtype: str|None
         """
         if mac in self.manufacturer_db:
             return self.manufacturer_db[mac]
@@ -280,14 +274,18 @@ class NetThread(threading.Thread):
 
             if do_nmap:
                 # LOG.debug('Host: %s  nmap: %s', host_list[i]['name'], str(host_list[i].get('nmap')))
-                if not host_list[i].get('nmap') or time.time()-host_list[i]['nmap']['tst'] > 60*60*24:  # daily nmap
-                    host_list[i]['nmap'] = self.nmap(host_list[i]['name'])
+                try:
+                    if not host_list[i].get('nmap') or time.time()-host_list[i]['nmap']['tst'] > 60*60*24:  # daily nmap
+                        logging.debug('Nmapping %s', host_list[i]['name'])
+                        host_list[i]['nmap'] = self.nmap(host_list[i]['name'])
 
 #                               if host_list[i].get('nmap') and
 #                                       host_list[i]['nmap']['state'] == 'down' and
 #                                       time.time()-host_list[i]['scan_tst'] < SCAN_LOOP_DELAY *2:
 #                                       host_list[i]['nmap'] = self.nmap(host_list[i]['name'])
                     do_nmap = False
+                except IndexError:
+                    logging.info('%r', host_list[i])
         
             if not host_list[i].get('mac owner') or 'errors' in host_list[i].get('mac owner'):
                 # LOG.debug('o: %s', host_list[i]['mac owner'])
@@ -342,7 +340,6 @@ def main():
             events = tmp.get('events', [])
         except (IOError, AttributeError) as exc:
             LOG.warning('REading pickled data: %s', exc)
-            pass
     
     _ = GUI()
     
@@ -359,6 +356,31 @@ def main():
         pickle.dump({'hosts': host_list, 'events': events},  open("kilrogg.p", "wb"))
 
 
+def compare_dicts(dict1, dict2):
+    """
+    :param Dict dict1:
+    :param Dict dict2:
+    :rtype: bool
+    """
+
+    for key in dict1.keys():
+        if key not in dict2 or dict1[key] != dict2[key]:
+            logging.debug('key: %r v1: %r v2: %r', key, dict1.get(key), dict2.get(key))
+            return False
+
+    return all(key in dict1 for key in dict2.keys())
+
+def get_name(host):
+    """
+    :param Dict[str,str|Dict[str,st]] host:
+    :rtype: str
+    """
+    for name in host.get('names', []):  # pick one that is not IP
+        if not name.replace('.', '').isnumeric():
+            return name
+    return host.get('name') or ''
+
+
 class GUI(object):
     GLADE_FILE = './kilrogg.glade'
 
@@ -368,12 +390,14 @@ class GUI(object):
         self.gui.add_from_file(self.GLADE_FILE)
         self.gui.get_object('window1').connect("destroy", Gtk.main_quit)
         self.gui.get_object('window1').show_all()
-    
-        tview = self.gui.get_object('Hosts')
-        # Host type fg color, bg color, tooltip, mac
-        tview.set_model(Gtk.ListStore(str, str, str, str, str, str))
-        tview.append_column(Gtk.TreeViewColumn('Host', Gtk.CellRendererText(), text=0, background=3))
+        self.device_list = {}
 
+        tview = self.gui.get_object('Hosts') # type: Gtk.TreeView
+        # Host type fg color, bg color, tooltip, mac
+        tview.set_model(Gtk.ListStore(str, str, str, str, str, str, int, str))
+        tview.append_column(Gtk.TreeViewColumn('No', Gtk.CellRendererText(), text=6, background=3))
+        tview.append_column(Gtk.TreeViewColumn('Host', Gtk.CellRendererText(), text=0, background=3))
+        tview.append_column(Gtk.TreeViewColumn('Name', Gtk.CellRendererText(), text=7, background=3))
         tview.append_column(Gtk.TreeViewColumn('type', Gtk.CellRendererText(), text=1, background=3))
     
         #    ui.treeview_debug.append_column(gtk.TreeViewColumn('Value', gtk.CellRendererText(), text=1))
@@ -391,7 +415,7 @@ class GUI(object):
         tview.has_tooltip = True
         tview.connect('query-tooltip', self.query_tooltip)
 
-        tve = self.gui.get_object('Events')
+        tve = self.gui.get_object('Events')  # type: Gtk.TreeView
         tve.set_model(Gtk.ListStore(str, str))
         tve.append_column(Gtk.TreeViewColumn('Time',  Gtk.CellRendererText(), text=0))
         tve.append_column(Gtk.TreeViewColumn('Event', Gtk.CellRendererText(), text=1))
@@ -409,7 +433,7 @@ class GUI(object):
         params Tuple args: Tree, x, y, keyboard mode, tooltip
         """
 
-        logging.debug('tooltip? %r', repr(args))
+        # logging.debug('tooltip? %r', repr(args))
 
         result = args[0].get_path_at_pos(args[1],args[2])
 
@@ -418,7 +442,7 @@ class GUI(object):
 
         path, column, _, _ = result
         mac = args[0].get_model()[path][5]
-        logging.debug('path? %r', repr(args[0].get_model()[path][5]))
+        # logging.debug('path? %r', repr(args[0].get_model()[path][5]))
         args[4].set_markup(self.format_tooltip(host_list[mac]))
 
         return True
@@ -444,51 +468,87 @@ class GUI(object):
             self.gui.get_object('dialog_label').hide()
     
     def on_treeview_button_press_event(self, treeview, event):
-        if event.button == 3:
-            x = int(event.x)
-            y = int(event.y)
-            etime = event.time
-            pthinfo = treeview.get_path_at_pos(x, y)
-            if pthinfo is not None:
-                path, col, cellx, celly = pthinfo
-                treeview.grab_focus()
-                treeview.set_cursor(path, col, 0)
-                hosts_popup = Gtk.Menu()
-                
-                host = host_list[treeview.get_model()[path[0]][5]]
-                mitem = Gtk.MenuItem('Label ... ')
-                hosts_popup.append(mitem)
-                mitem.connect("activate", self.on_label, host['mac'])
-                mitem.show()
+        x = int(event.x)
+        y = int(event.y)
+        etime = event.time
+        pthinfo = treeview.get_path_at_pos(x, y)
+        if pthinfo is None:
+            return
+        path, col, cellx, celly = pthinfo
+        treeview.grab_focus()
+        treeview.set_cursor(path, col, 0)
+        hosts_popup = Gtk.Menu()
 
-                if host.get('nmap') and host['nmap'].get('ports'):
-                    for i in host['nmap']['ports']:
-                        if i[2] == 'ssh':
-                            mi = Gtk.MenuItem('ssh as root')
-                            hosts_popup.append(mi)
-                            mi.connect("activate", self.on_external, {'target': host['name'], 'command': 'ssh'})
-                            mi.show()
-                        if i[2] == 'http':
-                            mi = Gtk.MenuItem('http')
-                            hosts_popup.append(mi)
-                            mi.connect("activate", self.on_external, {'target': host['name'], 'command': 'http'})
-                            mi.show()
-    #       self.popup_for_device(None, parent_menu_shell, parent_menu_item, func, data, button, activate_time)
-                hosts_popup.popup(None, None, None, None, event.button, etime)
-            return True
+        host = host_list[treeview.get_model()[path[0]][5]]
+        logging.debug('%r', host)
+
+        if event.button == 1:
+            self.gui.get_object('lbl_info_ip').set_markup(host.get('IP') or '')
+            self.gui.get_object('lbl_info_mac').set_markup(host.get('mac') or '')
+            self.gui.get_object('lbl_info_macowner').set_markup(host.get('mac owner') or '')
+
+            for name in host.get('names', []):  # pick one that is not IP
+                if not name.replace('.','').isnumeric():
+                    self.gui.get_object('lbl_info_name').set_markup(name)
+                    break
+            else:
+                self.gui.get_object('lbl_info_name').set_markup(host.get('name') or '')
+
+            self.gui.get_object('lbl_info_up_since').set_markup(time.ctime(host['state']['tst'])[4:-5])
+            self.gui.get_object('lbl_info_online').set_markup(host['state'].get('state') or '')
+            self.gui.get_object('entry_info_label').set_text(host.get('label') or '')
+            try:
+                ports = str(host['nmap']['ports'])
+                self.gui.get_object('txt_info_nmap').textbuffer.set_text(ports)
+            except KeyError:
+                pass
+
+        elif event.button == 3:
+            mitem = Gtk.MenuItem('Label ... ')
+            hosts_popup.append(mitem)
+            mitem.connect("activate", self.on_label, host['mac'])
+            mitem.show()
+
+            if host.get('nmap') and host['nmap'].get('ports'):
+                for i in host['nmap']['ports']:
+                    if i[2] == 'ssh':
+                        mi = Gtk.MenuItem('ssh as root')
+                        hosts_popup.append(mi)
+                        mi.connect("activate", self.on_external, {'target': host['name'], 'command': 'ssh'})
+                        mi.show()
+                    if i[2] == 'http':
+                        mi = Gtk.MenuItem('http')
+                        hosts_popup.append(mi)
+                        mi.connect("activate", self.on_external, {'target': host['name'], 'command': 'http'})
+                        mi.show()
+#       self.popup_for_device(None, parent_menu_shell, parent_menu_item, func, data, button, activate_time)
+            hosts_popup.popup(None, None, None, None, event.button, etime)
+        return True
 
     def update_gui(self):
         """ Repaint GUI """
 #        LOG.debug('update gui')
+
+        # ======================= Events ====================================
         model = self.gui.get_object('Hosts').get_model()
 #        tmp = host_list.values()
-        sorted_list = sorted(host_list.values(), key=lambda k: k['name'])
+        # sorted_list = sorted(host_list.values(), key=lambda k: k['name'])
+
+        scroll_offset = self.gui.get_object('scrolledwindow1').get_vadjustment().get_value()
+        # logging.debug('Scroll offset: %d', scroll_offset)
+        if compare_dicts(host_list, self.device_list):
+             return True
+        self.device_list = dict(host_list)
+
+        tmp_hosts = sorted(host_list.values(), key=lambda k: k['name'])
+        # if self.device_list == tmp_hosts:
+        #    return True
 
         class_list = []
         other_list = []
         old_list = []
 
-        for j in sorted_list:  # sort host list into groups
+        for j in tmp_hosts:  # sort host list into groups
             if j['scan_tst'] < time.time() - 60*60*24*7:
                 old_list.append(j)
                 continue
@@ -498,6 +558,7 @@ class GUI(object):
             other_list.append(j)               
 
         model.clear()                
+        count = 0
         for group_list in (sorted(class_list, key=lambda k: k['node_class']), other_list, old_list):
             for j in group_list:
                 color = '#e0e0e0'
@@ -513,9 +574,16 @@ class GUI(object):
                 if j.get('mac owner') and 'Not Found' not in j.get('mac owner'):
                     column2 += '['+j.get('mac owner')+']'
 #                LOG.debug('label: %s class: %s  column2: %s', j.get('label'),j.get('node class'))
-                model.append((j['name'], column2, '#88FF88', color, buf, j['mac']))
+                model.append((j['IP'], column2, '#88FF88', color, buf, j['mac'], count, get_name(j)))
+                count += 1
 
-        tve = self.gui.get_object('Events')
+
+        self.gui.get_object('scrolledwindow1').get_vadjustment().set_value(scroll_offset)
+        while Gtk.events_pending():
+            Gtk.main_iteration_do(False)
+
+        # ======================= Events ====================================
+        tve = self.gui.get_object('Events')  # type: Gtk.TreeView
         tve.get_model().clear()
         
         count = 0  # limit number of events shown to 200
@@ -543,7 +611,7 @@ class GUI(object):
         if host.get('nmap'):
             if host['nmap']['state'] == 'down':
                 buf += '\n Host is unreachable.'
-            else:                
+            else:
                 if host['nmap'].get('IP'):
                     buf += '\n IP   \t\t: ' + host['nmap']['IP'].decode("utf-8")
                 if host['nmap'].get('MAC owner'):
@@ -553,10 +621,7 @@ class GUI(object):
 #                               print host['name'], host['nmap']['ports']
                     for i in host['nmap']['ports']:
                         #                         print host['name'],p
-                        if len(i) < 3:
-                            pass
-#                           print 'Grabage in port list, host:',host['name'],p
-                        else:
+                        if len(i) >= 3:
                             buf += '\n    ' + i[0].decode("utf-8").ljust(9) + '\t' + i[2].decode("utf-8")
                 else:
                     buf += '\n Host has no open ports!'
