@@ -37,7 +37,7 @@ def color_lookup(state, timestamp):
     :param str state:
     :param int timestamp:
     """
-    logging.debug('State: %s, tst: %r', state, timestamp)
+    # logging.debug('State: %s, tst: %r', state, timestamp)
     if state != 'down':
         if time.time() - timestamp < 60 * 5:
             return node_state_colors['recently up']

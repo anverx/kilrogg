@@ -80,73 +80,81 @@ class NetScanner(threading.Thread):
                     continue
         return None
 
+    @staticmethod
+    def __fping():
+        """
+        Do some network voodoo and run fping
+        :rtype: bool
+        """
+        iface = NetScanner.get_default_iface_name_linux()
+        if not iface:
+            logging.debug('Couldn\'t nefault network interface')
+            return False
+
+        try:
+            tmp_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            # target = socket.inet_ntoa(fcntl.ioctl(tmp_sock.fileno(),
+            # 0x8915, struct.pack('256s', IFACE[:15]))[20:24])
+            target = socket.inet_ntoa(fcntl.ioctl(tmp_sock.fileno(), 0x8915,
+                                                  struct.pack('256s', iface.encode()))[20:24])
+        except IOError as exc:
+            logging.debug('Couldn\'t get local IP: %s', exc)
+            return False
+
+        target = '.'.join(target.split('.')[:-1]) + '.0/24'
+        #                       s = 'fping -c1 -q -g '+s +'.0/24 2 >/dev/null'
+        #                       print 'command:', s
+        f_null = open(os.devnull, 'w')
+        #            print 'fping', '-c1', '-q', '-g', target
+        subprocess.call(['fping', '-c1', '-q', '-g', target], stderr=f_null)
+        return True
+
+    @classmethod
+    def __parse_arp(cls):
+        """
+        :rtype: Dict[]
+        """
+        res = open('/proc/net/arp').read()
+        res = str(res).split('\n')
+
+        fresh_host_list = {}
+        for i in res:
+            if i.rfind('(incomplete)') == -1:
+                row = i.split()
+                # print ('row: ', row)
+                if len(row) > 2 and row[cls.COLUMN_MAC].find(':') != -1:
+                    tdata = {'IP': row[cls.COLUMN_IP], 'mac': row[cls.COLUMN_MAC],
+                             'iface': row[cls.COLUMN_INTERFACE],
+                             'scan_tst': time.time()}  # type: Dict[str, str|float]
+                    if True:  # not (host_list.get(row[2]) and  host_list[row[2]].get('IP')) :
+                        try:
+                            # LOG.debug('looking up: %s', row[0] )
+                            tdata['name'] = socket.gethostbyaddr(row[cls.COLUMN_IP])[0]
+                        except (socket.gaierror, socket.herror):  # as exc:
+                            tdata['name'] = tdata['IP']
+                            # LOG.debug(' lookup fails %s %s', row[0] ,str(exc))
+
+                    for j in node_class_filter:
+                        if tdata[j[0]].lower().startswith(j[1].lower()):
+                            tdata['node_class'] = j[2]
+                    #                                                       node_class = ''
+                    fresh_host_list[row[cls.COLUMN_MAC]] = tdata
+
+        return  fresh_host_list
+
+
     def run(self):
         logging.debug('NetThread staring...')
 
         while True:
-            iface = self.get_default_iface_name_linux()
-            if not iface:
-                logging.debug('Couldn\'t nefault network interface')
-                time.sleep(5)
-                continue
-            # target = socket.gethostbyname(socket.gethostname())  # doesn't work everywhere
-            try:
-                tmp_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-                # target = socket.inet_ntoa(fcntl.ioctl(tmp_sock.fileno(),
-                # 0x8915, struct.pack('256s', IFACE[:15]))[20:24])
-                target = socket.inet_ntoa(fcntl.ioctl(tmp_sock.fileno(), 0x8915,
-                                                      struct.pack('256s', iface.encode()))[20:24])
-            except IOError as exc:
-                logging.debug('Couldn\'t get local IP: %s', exc)
+
+            if not self.__fping():
                 time.sleep(5)
                 continue
 
-            target = '.'.join(target.split('.')[:-1]) + '.0/24'
-            #                       s = 'fping -c1 -q -g '+s +'.0/24 2 >/dev/null'
-            #                       print 'command:', s
-            fnull = open(os.devnull, 'w')
-            #            print 'fping', '-c1', '-q', '-g', target
-            subprocess.call(['fping', '-c1', '-q', '-g', target], stderr=fnull)
-            # res = subprocess.check_output(['arp', '-n'])  # TODO change to reading of /proc/net/arp
-            res = open('/proc/net/arp').read()
-            res = str(res).split('\n')
-
-            fresh_host_list = {}
-            for i in res:
-                if i.rfind('(incomplete)') == -1:
-                    row = i.split()
-                    # print ('row: ', row)
-                    if len(row) > 2:
-                        # print t, len(t), t[2],  t[2].find(':')
-
-                        if row[self.COLUMN_MAC].find(':') != -1:
-                            # LOG.debug('%s  %s', ','.join(row), i)
-                            # tdata = dict(name = row[0], mac = row[2], iface = row[4], scan_tst = time.time() )
-                            tdata = {'IP': row[self.COLUMN_IP], 'mac': row[self.COLUMN_MAC],
-                                     'iface': row[self.COLUMN_INTERFACE],
-                                     'scan_tst': time.time()}  # type: Dict[str, str|float]
-                            if True:  # not (host_list.get(row[2]) and  host_list[row[2]].get('IP')) :
-                                try:
-                                    # LOG.debug('looking up: %s', row[0] )
-                                    tdata['name'] = socket.gethostbyaddr(row[self.COLUMN_IP])[0]
-                                except (socket.gaierror, socket.herror):  # as exc:
-                                    tdata['name'] = tdata['IP']
-                                    # LOG.debug(' lookup fails %s %s', row[0] ,str(exc))
-
-                            for j in node_class_filter:
-                                if tdata[j[0]].lower().startswith(j[1].lower()):
-                                    tdata['node_class'] = j[2]
-                            #                                                       node_class = ''
-                            fresh_host_list[row[self.COLUMN_MAC]] = tdata
-                            # print(repr(tdata))
+            fresh_host_list = self.__parse_arp()
             logging.debug('Found %d hosts', len(fresh_host_list))
             self.update_host_list(fresh_host_list)
-            #            self.update_gui()
-
-            #                       for j in host_list:
-            #                               if not host_list[j].get('node_class'):
-            #                                       print j, host_list[j]
-            #                                       model.append((host_list[j]['name'],''))
 
             time.sleep(self.SCAN_LOOP_DELAY)
             if self.quit:
