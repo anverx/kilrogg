@@ -14,6 +14,17 @@ from filter import node_class_filter
 from typing import List, Dict
 
 
+class Host:
+    def __init__(self):
+        self.mac = ''
+        self.name = ''
+        self.ip = ''
+        self.scan_timestamp = 0
+        self.is_up = False
+        self.mac_owner = ''
+        self.names = []  # type: List[str]
+        self.ips = []  # type: List[str]
+
 class NetScanner(threading.Thread):
     """ All the network stuff is done in a separate thread so the gui wouldn't lock up """
     MAC_LOOKUP_SITE = 'https://api.macvendors.com/'

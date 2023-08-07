@@ -231,10 +231,13 @@ class GUI(object):
             self.gui.get_object('lbl_info_online').set_markup(host['state'].get('state') or '')
             self.gui.get_object('entry_info_label').set_text(host.get('label') or '')
             try:
-                ports = str(host['nmap']['ports'])
-                self.gui.get_object('txt_info_nmap').get_buffer().set_text(ports)
+                # ports = str(host['nmap']['ports'])
+                ports_text = ''
+                for port in host['nmap']['ports']:
+                    ports_text += "%s: %s\n" %(port[0].decode(), port[2].decode())
+                self.gui.get_object('txt_info_nmap').get_buffer().set_text(ports_text[:-1])
             except KeyError:
-                pass
+                self.gui.get_object('txt_info_nmap').get_buffer().set_text('')
 
         elif event.button == 3:
             mitem = Gtk.MenuItem('Label ... ')
